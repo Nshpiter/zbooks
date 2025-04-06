@@ -3,7 +3,7 @@ import { getCookies, Cookie, setCookie } from "https://deno.land/std@0.177.1/htt
 
 // --- Configuration ---
 const ZLIB_BASE_URL = "z-library.sk"; // Use the appropriate base domain Z-Library resolves to
-const PROXY_DOMAIN = "zbooks.npiter.com"; // <<<<<====== MAKE SURE THIS IS YOUR CUSTOM DOMAIN
+// const PROXY_DOMAIN = ""; // <<<<<====== MAKE SURE THIS IS YOUR CUSTOM DOMAIN (现在从环境变量读取)
 const HAS_AGREED_COOKIE = "has_agreed";
 const HIDE_TELEGRAM_GROUP_COOKIE = "hide_telegram_group";
 const AUTH_COOKIE_NAME = "proxy_auth_session"; // Name for the authentication cookie
@@ -16,6 +16,15 @@ if (!REQUIRED_PASSWORD) {
   console.error("Please set the PROXY_PASSWORD environment variable in your Deno Deploy project settings.");
   // Optional: Exit if password not set, otherwise auth is disabled
   // Deno.exit(1);
+}
+
+// --- Get Domain from Environment Variable ---
+const PROXY_DOMAIN = Deno.env.get("PROXY_DOMAIN");
+
+if (!PROXY_DOMAIN) {
+    console.error("FATAL ERROR: PROXY_DOMAIN environment variable is not set!");
+    console.error("Please set the PROXY_DOMAIN environment variable in your Deno Deploy project settings.");
+    Deno.exit(1); // 可选：如果域名未设置，退出程序
 }
 
 // --- Main Request Handler ---
@@ -33,17 +42,17 @@ async function handler(req: Request): Promise<Response> {
 
   // --- 1. Authentication Check ---
   if (REQUIRED_PASSWORD) {
-    const isAuthenticated = await isValidAuthCookie(incomingCookies);
+      const isAuthenticated = await isValidAuthCookie(incomingCookies);
 
-    if (!isAuthenticated) {
-      if (req.method === 'POST' && path === '/auth-login') {
-        return await handleLoginSubmission(req);
+      if (!isAuthenticated) {
+          if (req.method === 'POST' && path === '/auth-login') {
+              return await handleLoginSubmission(req);
+          }
+          const attemptedUrl = path + url.search;
+          return handleLoginPage(false, attemptedUrl);
       }
-      const attemptedUrl = path + url.search;
-      return handleLoginPage(false, attemptedUrl);
-    }
   } else {
-    console.warn("Warning: PROXY_PASSWORD is not set. Authentication is disabled.");
+      console.warn("Warning: PROXY_PASSWORD is not set. Authentication is disabled.");
   }
 
   // --- 2. Disclaimer / Config Pages (Only if Authenticated or Auth Disabled) ---
@@ -52,7 +61,7 @@ async function handler(req: Request): Promise<Response> {
   // Show disclaimer only if authenticated (or auth disabled) and haven't agreed
   if (!hasAgreed) {
     if (path === "/re-config") { // Allow access to config page even without agreeing
-      return handleConfigPage(req);
+        return handleConfigPage(req);
     }
     // Extract potential redirect URL from login to pass to disclaimer
     const redirectTo = params.get('redirect_to') || '/'; // Get from query param if login redirected here
@@ -98,7 +107,7 @@ async function handler(req: Request): Promise<Response> {
   } catch (error) {
     console.error(`[Auth OK] [Agreed] [${new Date().toISOString()}] Proxy Error:`, error);
     if (error instanceof TypeError && error.message.includes('fetch failed')) {
-      return new Response(`Proxy error: Could not connect to origin server (${targetHost}). Please try again later.`, { status: 502 });
+         return new Response(`Proxy error: Could not connect to origin server (${targetHost}). Please try again later.`, { status: 502 });
     }
     return new Response("Proxy error occurred. Check logs.", { status: 500 });
   }
@@ -108,15 +117,15 @@ async function handler(req: Request): Promise<Response> {
 
 /** Checks if the authentication cookie is present and valid. */
 async function isValidAuthCookie(cookies: Record<string, string>): Promise<boolean> {
-  // Simple check: Does the cookie exist with the correct value?
-  return cookies[AUTH_COOKIE_NAME] === "ok";
+    // Simple check: Does the cookie exist with the correct value?
+    return cookies[AUTH_COOKIE_NAME] === "ok";
 }
 
 /** Displays the HTML login page */
 function handleLoginPage(showError: boolean = false, attemptedUrl: string = "/"): Response {
-  const backgroundImage = "https://raw.githubusercontent.com/Nshpiter/docker-accelerate/refs/heads/main/background.jpg";
-  const errorMessage = showError ? '<p class="error-message">密码错误，请重试</p>' : '';
-  const htmlContent = `
+    const backgroundImage = "https://raw.githubusercontent.com/Nshpiter/docker-accelerate/refs/heads/main/background.jpg";
+    const errorMessage = showError ? '<p class="error-message">密码错误，请重试</p>' : '';
+    const htmlContent = `
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -149,65 +158,65 @@ function handleLoginPage(showError: boolean = false, attemptedUrl: string = "/")
     </div>
 </body>
 </html>`;
-  return new Response(htmlContent, {
-    status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8' }
-  });
+    return new Response(htmlContent, {
+        status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
 }
 
 /** Handles the submission of the login form. */
 async function handleLoginSubmission(req: Request): Promise<Response> {
-  if (!REQUIRED_PASSWORD) {
-    console.error(`[${new Date().toISOString()}] Login submission attempt but PROXY_PASSWORD is not configured.`);
-    return new Response("Authentication is not configured on the server.", { status: 500 });
-  }
-  try {
-    const formData = await req.formData();
-    const submittedPassword = formData.get("password") as string;
-    const redirectTo = formData.get("redirect_to") as string || "/";
-
-    if (submittedPassword === REQUIRED_PASSWORD) {
-      const headers = new Headers();
-      // --- *** START FIX *** ---
-      const cookie: Cookie = {
-        name: AUTH_COOKIE_NAME,
-        value: "ok",
-        path: "/",
-        domain: PROXY_DOMAIN, // Explicitly set domain
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax",
-        maxAge: 86400 * 30, // 30 days
-      };
-      // --- *** END FIX *** ---
-      setCookie(headers, cookie);
-
-      // Redirect to the original destination or homepage
-      // Add redirect_to as a query parameter for the disclaimer page to pick up
-      let safeRedirectTo = "/";
-      try {
-        const decodedRedirect = decodeURIComponent(redirectTo);
-        if (decodedRedirect.startsWith("/") && !decodedRedirect.startsWith("//") && !decodedRedirect.includes(":")) {
-          safeRedirectTo = decodedRedirect;
-        }
-      } catch (e) { /* Keep default */ }
-
-      const redirectUrl = new URL(req.url); // Use current request URL as base
-      redirectUrl.pathname = "/"; // Redirect to root (where disclaimer check happens)
-      redirectUrl.searchParams.set("redirect_to", safeRedirectTo); // Pass original target
-
-      console.log(`[${new Date().toISOString()}] Authentication successful. Redirecting via / to check agreement. Original target: ${safeRedirectTo}`);
-      headers.set("Location", redirectUrl.toString());
-      return new Response(null, { status: 302, headers });
-
-    } else {
-      console.log(`[${new Date().toISOString()}] Authentication failed: Incorrect password attempt.`);
-      const attemptedUrl = decodeURIComponent(redirectTo);
-      return handleLoginPage(true, attemptedUrl);
+    if (!REQUIRED_PASSWORD) {
+        console.error(`[${new Date().toISOString()}] Login submission attempt but PROXY_PASSWORD is not configured.`);
+        return new Response("Authentication is not configured on the server.", { status: 500 });
     }
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] Error processing login form:`, error);
-    return new Response("Error processing login request.", { status: 500 });
-  }
+    try {
+        const formData = await req.formData();
+        const submittedPassword = formData.get("password") as string;
+        const redirectTo = formData.get("redirect_to") as string || "/";
+
+        if (submittedPassword === REQUIRED_PASSWORD) {
+            const headers = new Headers();
+            // --- *** START FIX *** ---
+            const cookie: Cookie = {
+                name: AUTH_COOKIE_NAME,
+                value: "ok",
+                path: "/",
+                domain: PROXY_DOMAIN, // Explicitly set domain
+                httpOnly: true,
+                secure: true,
+                sameSite: "Lax",
+                maxAge: 86400 * 30, // 30 days
+            };
+            // --- *** END FIX *** ---
+            setCookie(headers, cookie);
+
+            // Redirect to the original destination or homepage
+            // Add redirect_to as a query parameter for the disclaimer page to pick up
+            let safeRedirectTo = "/";
+            try {
+                const decodedRedirect = decodeURIComponent(redirectTo);
+                if (decodedRedirect.startsWith("/") && !decodedRedirect.startsWith("//") && !decodedRedirect.includes(":") ) {
+                     safeRedirectTo = decodedRedirect;
+                }
+            } catch (e) { /* Keep default */ }
+
+            const redirectUrl = new URL(req.url); // Use current request URL as base
+            redirectUrl.pathname = "/"; // Redirect to root (where disclaimer check happens)
+            redirectUrl.searchParams.set("redirect_to", safeRedirectTo); // Pass original target
+
+            console.log(`[${new Date().toISOString()}] Authentication successful. Redirecting via / to check agreement. Original target: ${safeRedirectTo}`);
+            headers.set("Location", redirectUrl.toString());
+            return new Response(null, { status: 302, headers });
+
+        } else {
+            console.log(`[${new Date().toISOString()}] Authentication failed: Incorrect password attempt.`);
+            const attemptedUrl = decodeURIComponent(redirectTo);
+            return handleLoginPage(true, attemptedUrl);
+        }
+    } catch (error) {
+         console.error(`[${new Date().toISOString()}] Error processing login form:`, error);
+         return new Response("Error processing login request.", { status: 500 });
+    }
 }
 
 
@@ -215,62 +224,62 @@ async function handleLoginSubmission(req: Request): Promise<Response> {
 
 /** Modifies response headers: Location, Set-Cookie, etc. */
 function modifyResponseHeaders(responseHeaders: Headers, targetResponse: Response, targetUrl: URL, lang: string | null): void {
-  // 1. Handle Redirects (Location Header)
-  if (responseHeaders.has("location")) {
-    const originalLocation = responseHeaders.get("location")!;
-    try {
-      const targetLocation = new URL(originalLocation, targetUrl);
-      if (targetLocation.hostname.endsWith(ZLIB_BASE_URL)) {
-        const newLocation = targetLocation.pathname + targetLocation.search + targetLocation.hash;
-        responseHeaders.set("location", newLocation);
+    // 1. Handle Redirects (Location Header)
+     if (responseHeaders.has("location")) {
+      const originalLocation = responseHeaders.get("location")!;
+      try {
+        const targetLocation = new URL(originalLocation, targetUrl);
+        if (targetLocation.hostname.endsWith(ZLIB_BASE_URL)) {
+          const newLocation = targetLocation.pathname + targetLocation.search + targetLocation.hash;
+          responseHeaders.set("location", newLocation);
+        }
+      } catch (e) {
+         if (originalLocation.startsWith("/")) {
+            responseHeaders.set("location", originalLocation);
+        } else { /* Keep external or potentially invalid ones */ }
       }
-    } catch (e) {
-      if (originalLocation.startsWith("/")) {
-        responseHeaders.set("location", originalLocation);
-      } else { /* Keep external or potentially invalid ones */ }
     }
-  }
 
-  // 2. Remove problematic headers
-  responseHeaders.delete("X-Frame-Options");
-  responseHeaders.delete("Content-Security-Policy");
-  responseHeaders.delete("Strict-Transport-Security");
+    // 2. Remove problematic headers
+    responseHeaders.delete("X-Frame-Options");
+    responseHeaders.delete("Content-Security-Policy");
+    responseHeaders.delete("Strict-Transport-Security");
 
-  // 3. Process and Modify Set-Cookie Headers
-  const originalSetCookieHeaders = targetResponse.headers.getSetCookie();
-  responseHeaders.delete("Set-Cookie");
+    // 3. Process and Modify Set-Cookie Headers
+    const originalSetCookieHeaders = targetResponse.headers.getSetCookie();
+    responseHeaders.delete("Set-Cookie");
 
-  for (const cookieString of originalSetCookieHeaders) {
-    try {
-      const modifiedCookieString = modifyCookieString(cookieString, PROXY_DOMAIN);
-      if (modifiedCookieString) {
-        responseHeaders.append("Set-Cookie", modifiedCookieString);
-      }
-    } catch (e) {
-      console.error(`[${new Date().toISOString()}] Error processing cookie string "${cookieString}":`, e);
+    for (const cookieString of originalSetCookieHeaders) {
+        try {
+            const modifiedCookieString = modifyCookieString(cookieString, PROXY_DOMAIN);
+            if (modifiedCookieString) {
+                responseHeaders.append("Set-Cookie", modifiedCookieString);
+            }
+        } catch (e) {
+            console.error(`[${new Date().toISOString()}] Error processing cookie string "${cookieString}":`, e);
+        }
     }
-  }
 
-  // 4. Force Set siteLanguage Cookie (Always, if authenticated and agreed)
-  const siteLanguageValue = lang === 'zh' ? 'zh' : 'en';
-  const siteLanguageCookie: Cookie = {
-    name: "siteLanguage", value: siteLanguageValue, path: "/",
-    domain: PROXY_DOMAIN, // <<< Ensure domain is set here too
-    secure: true, sameSite: "None",
-    maxAge: 31536000 // 1 year
-  };
-  const siteLanguageCookieString = getCookieString(siteLanguageCookie);
-  responseHeaders.append("Set-Cookie", siteLanguageCookieString);
+    // 4. Force Set siteLanguage Cookie (Always, if authenticated and agreed)
+    const siteLanguageValue = lang === 'zh' ? 'zh' : 'en';
+    const siteLanguageCookie: Cookie = {
+      name: "siteLanguage", value: siteLanguageValue, path: "/",
+      domain: PROXY_DOMAIN, // <<< Ensure domain is set here too
+      secure: true, sameSite: "None",
+      maxAge: 31536000 // 1 year
+    };
+    const siteLanguageCookieString = getCookieString(siteLanguageCookie);
+    responseHeaders.append("Set-Cookie", siteLanguageCookieString);
 
-  // 5. Vary Header
-  if (!responseHeaders.has("Vary")) {
-    responseHeaders.set("Vary", "Cookie");
-  } else {
-    const vary = responseHeaders.get("Vary")!;
-    if (!vary.split(',').map(s => s.trim().toLowerCase()).includes('cookie')) {
-      responseHeaders.set("Vary", `${vary}, Cookie`);
+    // 5. Vary Header
+    if (!responseHeaders.has("Vary")) {
+        responseHeaders.set("Vary", "Cookie");
+    } else {
+        const vary = responseHeaders.get("Vary")!;
+        if (!vary.split(',').map(s => s.trim().toLowerCase()).includes('cookie')) {
+            responseHeaders.set("Vary", `${vary}, Cookie`);
+        }
     }
-  }
 }
 
 /** Creates modified headers for the outgoing request to Z-Library. */
@@ -282,10 +291,10 @@ function getModifiedRequestHeaders(originalHeaders: Headers, targetHost: string,
   if (lang === 'zh') {
     headers.set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
   } else {
-    const originalAcceptLanguage = headers.get("Accept-Language");
-    if (!originalAcceptLanguage || !originalAcceptLanguage.toLowerCase().startsWith('en')) {
-      headers.set("Accept-Language", "en-US,en;q=0.9");
-    }
+     const originalAcceptLanguage = headers.get("Accept-Language");
+     if (!originalAcceptLanguage || !originalAcceptLanguage.toLowerCase().startsWith('en')) {
+        headers.set("Accept-Language", "en-US,en;q=0.9");
+     }
   }
   headers.delete("via");
   headers.delete("x-forwarded-for");
@@ -298,52 +307,52 @@ function getModifiedRequestHeaders(originalHeaders: Headers, targetHost: string,
 
 /** Parses a Set-Cookie string, modifies domain/attributes, and returns the new string. */
 function modifyCookieString(cookieString: string, proxyDomain: string): string | null {
-  if (!cookieString) return null;
-  const parts = cookieString.split(';').map(part => part.trim());
-  if (parts.length === 0) return null;
-  const nameValueMatch = parts[0].match(/^([^=]+)=(.*)$/);
-  if (!nameValueMatch) return null;
-  const name = nameValueMatch[1];
-  const value = nameValueMatch[2];
+    if (!cookieString) return null;
+    const parts = cookieString.split(';').map(part => part.trim());
+    if (parts.length === 0) return null;
+    const nameValueMatch = parts[0].match(/^([^=]+)=(.*)$/);
+    if (!nameValueMatch) return null;
+    const name = nameValueMatch[1];
+    const value = nameValueMatch[2];
 
-  if (name === AUTH_COOKIE_NAME) return null; // Ignore if Z-lib tries to set our auth cookie
+    if (name === AUTH_COOKIE_NAME) return null; // Ignore if Z-lib tries to set our auth cookie
 
-  const modifiedAttributes = [`${name}=${value}`];
-  let domainSet = false;
+    const modifiedAttributes = [`${name}=${value}`];
+    let domainSet = false;
 
-  for (let i = 1; i < parts.length; i++) {
-    const attribute = parts[i];
-    const lowerAttr = attribute.toLowerCase();
-    if (lowerAttr.startsWith("domain=")) {
-      modifiedAttributes.push(`Domain=${proxyDomain}`); // Always override
-      domainSet = true;
-    } else if (lowerAttr.startsWith("secure") || lowerAttr.startsWith("samesite=")) {
-      // Skip, we will add them manually
-    } else if (lowerAttr.startsWith("path=") || lowerAttr.startsWith("expires=") || lowerAttr.startsWith("max-age=") || lowerAttr.startsWith("httponly")) {
-      modifiedAttributes.push(attribute); // Keep standard ones
-    } else if (attribute) {
-      modifiedAttributes.push(attribute); // Keep unknown ones
+    for (let i = 1; i < parts.length; i++) {
+        const attribute = parts[i];
+        const lowerAttr = attribute.toLowerCase();
+        if (lowerAttr.startsWith("domain=")) {
+            modifiedAttributes.push(`Domain=${proxyDomain}`); // Always override
+            domainSet = true;
+        } else if (lowerAttr.startsWith("secure") || lowerAttr.startsWith("samesite=")) {
+            // Skip, we will add them manually
+        } else if (lowerAttr.startsWith("path=") || lowerAttr.startsWith("expires=") || lowerAttr.startsWith("max-age=") || lowerAttr.startsWith("httponly")) {
+            modifiedAttributes.push(attribute); // Keep standard ones
+        } else if(attribute) {
+             modifiedAttributes.push(attribute); // Keep unknown ones
+        }
     }
-  }
 
-  if (!domainSet) modifiedAttributes.push(`Domain=${proxyDomain}`);
-  modifiedAttributes.push("Secure"); // Always add Secure
-  modifiedAttributes.push("SameSite=None"); // Use None for potential cross-site needs
+    if (!domainSet) modifiedAttributes.push(`Domain=${proxyDomain}`);
+    modifiedAttributes.push("Secure"); // Always add Secure
+    modifiedAttributes.push("SameSite=None"); // Use None for potential cross-site needs
 
-  return [...new Set(modifiedAttributes)].join('; '); // Remove duplicates and join
+    return [...new Set(modifiedAttributes)].join('; '); // Remove duplicates and join
 }
 
 /** Creates a Set-Cookie header string from a Cookie object. */
 function getCookieString(cookie: Cookie): string {
-  let parts = [`${cookie.name}=${encodeURIComponent(cookie.value)}`];
-  if (cookie.expires) parts.push(`Expires=${cookie.expires.toUTCString()}`);
-  if (cookie.maxAge !== undefined) parts.push(`Max-Age=${cookie.maxAge}`);
-  if (cookie.domain) parts.push(`Domain=${cookie.domain}`); // <<< Use this
-  if (cookie.path) parts.push(`Path=${cookie.path}`);
-  if (cookie.secure) parts.push("Secure");
-  if (cookie.httpOnly) parts.push("HttpOnly");
-  if (cookie.sameSite) parts.push(`SameSite=${cookie.sameSite}`);
-  return parts.join("; ");
+    let parts = [`${cookie.name}=${encodeURIComponent(cookie.value)}`];
+    if (cookie.expires) parts.push(`Expires=${cookie.expires.toUTCString()}`);
+    if (cookie.maxAge !== undefined) parts.push(`Max-Age=${cookie.maxAge}`);
+    if (cookie.domain) parts.push(`Domain=${cookie.domain}`); // <<< Use this
+    if (cookie.path) parts.push(`Path=${cookie.path}`);
+    if (cookie.secure) parts.push("Secure");
+    if (cookie.httpOnly) parts.push("HttpOnly");
+    if (cookie.sameSite) parts.push(`SameSite=${cookie.sameSite}`);
+    return parts.join("; ");
 }
 
 /** Handles the /re-config page for setting the language cookie. */
@@ -421,8 +430,8 @@ function handleDisclaimerPage(req: Request, hideTelegramInitially: boolean, redi
 // --- Start Server ---
 console.log(`[${new Date().toISOString()}] Server starting...`);
 if (REQUIRED_PASSWORD) {
-  console.log(`[${new Date().toISOString()}] Authentication enabled. Access via https://${PROXY_DOMAIN}/`);
+    console.log(`[${new Date().toISOString()}] Authentication enabled. Access via https://${PROXY_DOMAIN}/`);
 } else {
-  console.warn(`[${new Date().toISOString()}] WARNING: Authentication DISABLED because PROXY_PASSWORD env var is not set. Access via https://${PROXY_DOMAIN}/`);
+     console.warn(`[${new Date().toISOString()}] WARNING: Authentication DISABLED because PROXY_PASSWORD env var is not set. Access via https://${PROXY_DOMAIN}/`);
 }
 serve(handler);
