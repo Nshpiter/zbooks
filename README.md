@@ -1,2 +1,2 @@
 # zbooks
-`Environment Variables` = `PROXY_PASSWORD`
+`Environment Variables` = `PROXY_PASSWORD`  ,`PROXY_DOMAIN`
